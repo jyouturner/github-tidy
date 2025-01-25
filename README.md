@@ -69,13 +69,23 @@ Note: in both cases, Cursor composer is used to finish the project and code from
 
 [Claude](./claude_only)
 
-## Analysis of the two projects
+## Ask Gemini to Evaludate the two projects
 
 First use the combine-files.sh to combine each project into one file.
 
-Then asked Gemini 2.0 Flush to analyze the two projects and provide a recommendation on which approach is better.
+Then asked Gemini-2.0-Flush-Exp to analyze the two projects and provide a recommendation on which approach is better.
 
 [Prompt to Gemini 2.0 Flush](./per_gemini/prompt.txt)
 
 
 [Gemini 2.0 Flush Analysis](./per_gemini/response.md)
+
+Gemini-2.0-flush-exp thinks Claude-only is slightly better than the Deepseek-Claude project.
+
+Obviously, our next question to Gemini is ... why don't you improve on the Claude-only project?
+
+## Final Claude-Gemini Project
+
+[Claude-Gemini](./claude_and_gemini)
+
+Use Claude-only as the base, and ask Gemini to improve the project.

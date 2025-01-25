@@ -1,0 +1,57 @@
+We are trying to have a utility to tidy up github repository branches by archiving and deleting old branches.
+
+Here are the project requirements:
+
+---
+
+Branch Purging and Archival Policy
+1. Branch Categorization
+
+Protected Branches: develop, stage, master (excluded from purging/archival)
+Feature/Hotfix/Release Branches: All other branches (subject to purging/archival)
+2. Criteria for Purging and Archival
+
+Inactive Period: No commits or updates in the last 30 days.
+Merged Status: Branches already merged into develop, stage, or master.
+3. Archival Process
+
+Archival Branch Prefix: Move inactive branches to a prefixed namespace for easy tracking, e.g., archived/branch-name.
+Tagging: Optionally, tag the latest commit before archiving for reference, e.g., archived-branchname-YYYYMMDD.
+4. Purging Process
+
+Retention Period: Keep archived branches for 60 days before permanent deletion.
+Auto-Deletion: Automatically delete branches that remain archived and inactive for an additional 60 days.
+5. Exclusions
+
+Open Pull Requests (PRs): Do not purge branches with active/open PRs.
+Critical Tags: Branches linked to critical releases or tagged versions.
+ 
+
+A. Automated Scripts
+
+Schedule the archival script to run weekly and the purge script to run monthly.
+B. Notifications and Logging
+
+Slack/Email Notifications before archiving and deleting branches.
+Logging actions in a file or centralized log system for audit purposes.
+C. Governance and Approval Workflow
+
+Manual Review for critical branches (optional).
+Approval Process for deleting certain branches via Pull Requests.
+
+---
+
+uploaded are the two projects by two different approaches.
+- deepseek_and_claude_all_files.txt has the project structure and all the files by "Deepseek Claude"
+- claude_only_all_files.txt has the project structure and all the files by "Claude only"
+
+
+---
+
+Please read the requirements, and the two Python projects, evaluate the code quality, and provide a detailed analysis of the code.
+
+At the end, please provide a detailed analysis of the two projects, and provide a recommendation on which approach is better by score from 1 to 10.
+
+
+
+

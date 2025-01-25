@@ -1,0 +1,16 @@
+[tool.poetry]
+name = "github-branch-cleaner"
+version = "0.1.0"
+description = "GitHub branch cleanup automation tool"
+authors = ["Your Name <your.email@example.com>"]
+
+[tool.poetry.dependencies]
+python = "^3.8"
+PyGithub = "^2.1.1"
+google-cloud-firestore = "^2.13.1"
+functions-framework = "^3.5.0"
+requests = "^2.31.0"
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api" 

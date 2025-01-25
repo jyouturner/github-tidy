@@ -1,0 +1,158 @@
+# pyproject.toml
+[tool.poetry]
+name = "github-branch-manager"
+version = "0.1.0"
+description = "Automated GitHub branch management tool"
+authors = ["Your Name <your.email@example.com>"]
+
+[tool.poetry.dependencies]
+python = "^3.9"
+PyGithub = "^2.1.1"
+pyyaml = "^6.0.1"
+python-dotenv = "^1.0.0"
+slack-sdk = "^3.27.0"
+google-cloud-logging = "^3.9.0"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^7.4.0"
+black = "^23.7.0"
+isort = "^5.12.0"
+mypy = "^1.4.1"
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+# src/github_branch_manager/config.py
+from dataclasses import dataclass
+from typing import List
+import os
+from dotenv import load_dotenv
+
+@dataclass
+class Config:
+    protected_branches: List[str]
+    inactivity_days: int
+    retention_days: int
+    github_token: str
+    org_name: str
+    slack_token: str
+    
+    @classmethod
+    def from_env(cls) -> 'Config':
+        load_dotenv()
+        return cls(
+            protected_branches=['develop', 'stage', 'master'],
+            inactivity_days=30,
+            retention_days=60,
+            github_token=os.getenv('GITHUB_TOKEN', ''),
+            org_name=os.getenv('GITHUB_ORG', ''),
+            slack_token=os.getenv('SLACK_TOKEN', '')
+        )
+
+# src/github_branch_manager/branch_manager.py
+from datetime import datetime, timedelta
+from typing import List, Optional
+from github import Github
+from .config import Config
+from .logger import setup_logger
+from .notifier import SlackNotifier
+
+logger = setup_logger()
+
+class BranchManager:
+    def __init__(self, config: Config):
+        self.config = config
+        self.github = Github(config.github_token)
+        self.org = self.github.get_organization(config.org_name)
+        self.notifier = SlackNotifier(config.slack_token)
+
+    def is_branch_inactive(self, branch) -> bool:
+        cutoff_date = datetime.now() - timedelta(days=self.config.inactivity_days)
+        last_commit = branch.commit.commit.author.date
+        return last_commit < cutoff_date
+
+    def should_archive_branch(self, branch) -> bool:
+        if branch.name in self.config.protected_branches:
+            return False
+        if branch.name.startswith('archived/'):
+            return False
+        return self.is_branch_inactive(branch)
+
+    def archive_branches(self, repo_name: str) -> None:
+        repo = self.org.get_repo(repo_name)
+        for branch in repo.get_branches():
+            if self.should_archive_branch(branch):
+                try:
+                    new_name = f"archived/{branch.name}"
+                    repo.get_git_ref(f"heads/{branch.name}").edit(
+                        sha=branch.commit.sha,
+                        force=True
+                    )
+                    self.notifier.notify_archive(repo_name, branch.name)
+                    logger.info(f"Archived branch {branch.name} in {repo_name}")
+                except Exception as e:
+                    logger.error(f"Failed to archive {branch.name}: {str(e)}")
+
+# src/github_branch_manager/main.py
+import os
+from .config import Config
+from .branch_manager import BranchManager
+from .logger import setup_logger
+
+def main():
+    logger = setup_logger()
+    try:
+        config = Config.from_env()
+        manager = BranchManager(config)
+        
+        # Process all repositories in the organization
+        for repo in manager.org.get_repos():
+            logger.info(f"Processing repository: {repo.name}")
+            manager.archive_branches(repo.name)
+            
+    except Exception as e:
+        logger.error(f"Failed to process repositories: {str(e)}")
+        raise
+
+if __name__ == "__main__":
+    main()
+
+# Dockerfile
+FROM python:3.9-slim
+
+WORKDIR /app
+
+RUN pip install poetry
+
+COPY pyproject.toml poetry.lock ./
+RUN poetry config virtualenvs.create false \
+    && poetry install --no-dev --no-interaction --no-ansi
+
+COPY src/ ./src/
+
+CMD ["python", "-m", "github_branch_manager.main"]
+
+# cloud-run-job.yaml
+apiVersion: run.googleapis.com/v1
+kind: Job
+metadata:
+  name: github-branch-manager
+spec:
+  template:
+    spec:
+      containers:
+      - image: gcr.io/YOUR_PROJECT_ID/github-branch-manager
+        env:
+        - name: GITHUB_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: github-token
+              key: latest
+        - name: GITHUB_ORG
+          value: "your-org-name"
+        - name: SLACK_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: slack-token
+              key: latest

@@ -1,0 +1,254 @@
+# github_branch_cleaner/
+# └── src/
+#     ├── __init__.py
+#     ├── config.py
+#     ├── github_client.py
+#     ├── branch_manager.py
+#     ├── notifier.py
+#     └── main.py
+
+# config.py
+from dataclasses import dataclass
+from typing import List
+import os
+
+@dataclass
+class Config:
+    GITHUB_TOKEN: str
+    GITHUB_ORG: str
+    PROTECTED_BRANCHES: List[str] = ("develop", "stage", "master")
+    ARCHIVE_PREFIX: str = "archived/"
+    INACTIVITY_DAYS: int = 30
+    RETENTION_DAYS: int = 60
+    CRITICAL_TAG_PATTERNS: List[str] = ("v*", "release-*")
+    SLACK_WEBHOOK_URL: str = ""
+    ENABLE_EMAIL: bool = False
+    EMAIL_RECIPIENTS: List[str] = ()
+    
+    @classmethod
+    def from_env(cls):
+        return cls(
+            GITHUB_TOKEN=os.getenv("GITHUB_TOKEN"),
+            GITHUB_ORG=os.getenv("GITHUB_ORG"),
+            PROTECTED_BRANCHES=os.getenv("PROTECTED_BRANCHES", "develop,stage,master").split(","),
+            SLACK_WEBHOOK_URL=os.getenv("SLACK_WEBHOOK_URL", ""),
+            EMAIL_RECIPIENTS=os.getenv("EMAIL_RECIPIENTS", "").split(",")
+        )
+
+# github_client.py
+from datetime import datetime, timezone
+from typing import List, Optional
+from github import Github
+from github.Repository import Repository
+from github.Branch import Branch
+import logging
+
+class GitHubClient:
+    def __init__(self, token: str):
+        self.github = Github(token)
+        self.logger = logging.getLogger(__name__)
+    
+    def get_org_repos(self, org_name: str) -> List[Repository]:
+        try:
+            org = self.github.get_organization(org_name)
+            return list(org.get_repos())
+        except Exception as e:
+            self.logger.error(f"Failed to get repos for org {org_name}: {e}")
+            return []
+    
+    def get_branch_last_activity(self, repo: Repository, branch: Branch) -> datetime:
+        try:
+            return branch.commit.commit.author.date
+        except Exception as e:
+            self.logger.error(f"Failed to get last activity for branch {branch.name}: {e}")
+            return datetime.now(timezone.utc)
+    
+    def is_branch_merged(self, repo: Repository, branch: Branch, 
+                        protected_branches: List[str]) -> bool:
+        try:
+            for base in protected_branches:
+                pulls = repo.get_pulls(state='closed', 
+                                     base=base,
+                                     head=branch.name)
+                if any(pr.merged for pr in pulls):
+                    return True
+            return False
+        except Exception as e:
+            self.logger.error(f"Failed to check merge status for {branch.name}: {e}")
+            return False
+    
+    def has_open_prs(self, repo: Repository, branch_name: str) -> bool:
+        try:
+            pulls = repo.get_pulls(state='open', head=branch_name)
+            return pulls.totalCount > 0
+        except Exception as e:
+            self.logger.error(f"Failed to check PRs for {branch_name}: {e}")
+            return True
+    
+    def has_critical_tags(self, repo: Repository, branch: Branch, 
+                         patterns: List[str]) -> bool:
+        try:
+            import fnmatch
+            commit_sha = branch.commit.sha
+            for tag in repo.get_tags():
+                if tag.commit.sha != commit_sha:
+                    continue
+                if any(fnmatch.fnmatch(tag.name, p) for p in patterns):
+                    return True
+            return False
+        except Exception as e:
+            self.logger.error(f"Failed to check tags for {branch.name}: {e}")
+            return True
+
+    def archive_branch(self, repo: Repository, branch: Branch, 
+                      archive_prefix: str) -> bool:
+        try:
+            new_name = f"{archive_prefix}{branch.name}"
+            repo.create_git_ref(
+                ref=f"refs/heads/{new_name}",
+                sha=branch.commit.sha
+            )
+            repo.get_git_ref(f"heads/{branch.name}").delete()
+            return True
+        except Exception as e:
+            self.logger.error(f"Failed to archive branch {branch.name}: {e}")
+            return False
+
+# branch_manager.py
+from datetime import datetime, timezone, timedelta
+from typing import List, Tuple
+import logging
+from google.cloud import firestore
+
+class BranchManager:
+    def __init__(self, github_client: GitHubClient, config: Config):
+        self.github = github_client
+        self.config = config
+        self.db = firestore.Client()
+        self.logger = logging.getLogger(__name__)
+    
+    def process_repos(self) -> List[Tuple[str, str, str]]:
+        """Returns list of (repo_name, branch_name, action) tuples"""
+        actions = []
+        for repo in self.github.get_org_repos(self.config.GITHUB_ORG):
+            actions.extend(self._process_repo(repo))
+        return actions
+    
+    def _process_repo(self, repo: Repository) -> List[Tuple[str, str, str]]:
+        actions = []
+        for branch in repo.get_branches():
+            if branch.name in self.config.PROTECTED_BRANCHES:
+                continue
+                
+            if branch.name.startswith(self.config.ARCHIVE_PREFIX):
+                if self._should_purge(repo, branch):
+                    action = "purge"
+                else:
+                    continue
+            else:
+                if self._should_archive(repo, branch):
+                    action = "archive"
+                else:
+                    continue
+                    
+            actions.append((repo.name, branch.name, action))
+        return actions
+    
+    def _should_archive(self, repo: Repository, branch: Branch) -> bool:
+        # Check inactivity
+        last_activity = self.github.get_branch_last_activity(repo, branch)
+        if (datetime.now(timezone.utc) - last_activity).days < self.config.INACTIVITY_DAYS:
+            return False
+            
+        # Check merge status
+        if not self.github.is_branch_merged(repo, branch, self.config.PROTECTED_BRANCHES):
+            return False
+            
+        # Check open PRs
+        if self.github.has_open_prs(repo, branch.name):
+            return False
+            
+        # Check critical tags
+        if self.github.has_critical_tags(repo, branch, self.config.CRITICAL_TAG_PATTERNS):
+            return False
+            
+        return True
+        
+    def _should_purge(self, repo: Repository, branch: Branch) -> bool:
+        doc_ref = self.db.collection('archived_branches').document(
+            f"{repo.name}-{branch.name}"
+        )
+        doc = doc_ref.get()
+        
+        if not doc.exists:
+            return False
+            
+        archive_date = doc.get('archive_date')
+        if (datetime.now(timezone.utc) - archive_date).days < self.config.RETENTION_DAYS:
+            return False
+            
+        return True
+
+# notifier.py
+import requests
+import logging
+from typing import List
+
+class Notifier:
+    def __init__(self, slack_webhook: str, email_recipients: List[str]):
+        self.slack_webhook = slack_webhook
+        self.email_recipients = email_recipients
+        self.logger = logging.getLogger(__name__)
+    
+    def notify_actions(self, actions: List[Tuple[str, str, str]]):
+        if not actions:
+            return
+            
+        message = "Branch cleanup summary:\n"
+        for repo, branch, action in actions:
+            message += f"- {action.title()}: {repo}/{branch}\n"
+            
+        if self.slack_webhook:
+            self._send_slack(message)
+        if self.email_recipients:
+            self._send_email(message)
+    
+    def _send_slack(self, message: str):
+        try:
+            requests.post(self.slack_webhook, json={"text": message})
+        except Exception as e:
+            self.logger.error(f"Failed to send Slack notification: {e}")
+    
+    def _send_email(self, message: str):
+        # Implement email sending logic (e.g., using sendgrid)
+        pass
+
+# main.py - Cloud Function entry points
+from google.cloud import firestore
+import functions_framework
+
+@functions_framework.http
+def archive_branches(request):
+    """Weekly branch archival function"""
+    config = Config.from_env()
+    github = GitHubClient(config.GITHUB_TOKEN)
+    manager = BranchManager(github, config)
+    notifier = Notifier(config.SLACK_WEBHOOK_URL, config.EMAIL_RECIPIENTS)
+    
+    actions = manager.process_repos()
+    notifier.notify_actions(actions)
+    
+    return 'OK', 200
+
+@functions_framework.http
+def purge_branches(request):
+    """Monthly branch purging function"""
+    config = Config.from_env()
+    github = GitHubClient(config.GITHUB_TOKEN)
+    manager = BranchManager(github, config)
+    notifier = Notifier(config.SLACK_WEBHOOK_URL, config.EMAIL_RECIPIENTS)
+    
+    actions = manager.process_repos()
+    notifier.notify_actions(actions)
+    
+    return 'OK', 200

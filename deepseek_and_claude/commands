@@ -1,0 +1,15 @@
+mkdir -p github_branch_cleaner/src
+cd github_branch_cleaner/src
+touch __init__.py config.py github_client.py branch_manager.py notifier.py main.py 
+
+# Initialize poetry project in the github_branch_cleaner directory
+cd github_branch_cleaner
+poetry init --name github-branch-cleaner --description "GitHub branch cleanup automation tool" --author "Your Name <your.email@example.com>" --python "^3.8" --dependency PyGithub@^2.1.1 --dependency google-cloud-firestore@^2.13.1 --dependency functions-framework@^3.5.0 --dependency requests@^2.31.0 --no-interaction
+
+# Or you can just initialize and add dependencies separately:
+poetry init
+poetry add PyGithub@^2.1.1 google-cloud-firestore@^2.13.1 functions-framework@^3.5.0 requests@^2.31.0 
+
+mkdir -p github_branch_cleaner/scripts
+chmod +x github_branch_cleaner/scripts/deploy.sh
+chmod +x github_branch_cleaner/scripts/setup_gcp.sh 

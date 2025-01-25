@@ -1,0 +1,148 @@
+# src/github_branch_manager/notifier.py
+from slack_sdk import WebClient
+from slack_sdk.errors import SlackApiError
+from .logger import setup_logger
+
+logger = setup_logger()
+
+class SlackNotifier:
+    def __init__(self, token: str):
+        self.client = WebClient(token=token)
+
+    def notify_archive(self, repo: str, branch: str) -> None:
+        try:
+            text = f":file_folder: Branch `{branch}` in repository `{repo}` has been archived"
+            self.client.chat_postMessage(channel="#github-notifications", text=text)
+        except SlackApiError as e:
+            logger.error(f"Failed to send Slack notification: {str(e)}")
+
+    def notify_deletion(self, repo: str, branch: str) -> None:
+        try:
+            text = f":wastebasket: Branch `{branch}` in repository `{repo}` has been deleted"
+            self.client.chat_postMessage(channel="#github-notifications", text=text)
+        except SlackApiError as e:
+            logger.error(f"Failed to send Slack notification: {str(e)}")
+
+# src/github_branch_manager/logger.py
+import logging
+from google.cloud import logging as cloud_logging
+
+def setup_logger():
+    logger = logging.getLogger('github-branch-manager')
+    
+    if not logger.handlers:
+        logger.setLevel(logging.INFO)
+        
+        # Cloud Logging handler
+        client = cloud_logging.Client()
+        cloud_handler = cloud_logging.handlers.CloudLoggingHandler(client)
+        cloud_handler.setFormatter(logging.Formatter(
+            '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        ))
+        logger.addHandler(cloud_handler)
+        
+        # Console handler
+        console_handler = logging.StreamHandler()
+        console_handler.setFormatter(logging.Formatter(
+            '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        ))
+        logger.addHandler(console_handler)
+    
+    return logger
+
+# .github/workflows/ci.yml
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v2
+    
+    - name: Set up Python
+      uses: actions/setup-python@v2
+      with:
+        python-version: '3.9'
+    
+    - name: Install Poetry
+      run: |
+        curl -sSL https://install.python-poetry.org | python3 -
+    
+    - name: Install dependencies
+      run: poetry install
+    
+    - name: Run tests
+      run: poetry run pytest
+    
+    - name: Check formatting
+      run: |
+        poetry run black . --check
+        poetry run isort . --check
+
+# tests/test_branch_manager.py
+import pytest
+from datetime import datetime, timedelta
+from unittest.mock import Mock, patch
+from github_branch_manager.branch_manager import BranchManager
+from github_branch_manager.config import Config
+
+@pytest.fixture
+def config():
+    return Config(
+        protected_branches=['develop', 'stage', 'master'],
+        inactivity_days=30,
+        retention_days=60,
+        github_token='dummy-token',
+        org_name='test-org',
+        slack_token='slack-token'
+    )
+
+@pytest.fixture
+def branch_manager(config):
+    with patch('github_branch_manager.branch_manager.Github'):
+        return BranchManager(config)
+
+def test_is_branch_inactive(branch_manager):
+    mock_branch = Mock()
+    mock_branch.commit.commit.author.date = datetime.now() - timedelta(days=31)
+    assert branch_manager.is_branch_inactive(mock_branch) is True
+
+def test_should_not_archive_protected_branch(branch_manager):
+    mock_branch = Mock()
+    mock_branch.name = 'develop'
+    assert branch_manager.should_archive_branch(mock_branch) is False
+
+# .gitignore
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+.env
+.venv
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store

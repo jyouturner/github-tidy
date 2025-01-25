@@ -1,0 +1,22 @@
+apiVersion: run.googleapis.com/v1
+kind: Job
+metadata:
+  name: github-branch-manager
+spec:
+  template:
+    spec:
+      containers:
+      - image: gcr.io/YOUR_PROJECT_ID/github-branch-manager
+        env:
+        - name: GITHUB_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: github-token
+              key: latest
+        - name: GITHUB_ORG
+          value: "your-org-name"
+        - name: SLACK_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: slack-token
+              key: latest 
